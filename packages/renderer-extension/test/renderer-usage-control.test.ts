@@ -7,9 +7,46 @@ import {
   formatRendererPlanWindow,
   formatRendererTokenCount,
   formatRendererTokenRate,
+  outputSpeedFor,
   rendererUsageHasDisplayData,
   rendererUsageMessages,
 } from "../src/renderer-usage-control.js";
+
+describe("Renderer Usage output speed rows", () => {
+  const speedUsage = { outputTokens: 400, outputTokensPerSecond: 42.5 };
+  const noSpeedUsage = { outputTokens: 400 };
+
+  it("fills the Codex row and dashes the DSH row on a native Codex Thread", () => {
+    expect(outputSpeedFor(speedUsage, "codex", "codex", "en")).toBe("42.5 tok/s");
+    expect(outputSpeedFor(speedUsage, "codex", "deepseek-harness", "en")).toBe("\u2014");
+  });
+
+  it("fills the DSH row and dashes the Codex row on a DeepSeek Harness Thread", () => {
+    expect(outputSpeedFor(speedUsage, "deepseek-harness", "deepseek-harness", "en")).toBe(
+      "42.5 tok/s",
+    );
+    expect(outputSpeedFor(speedUsage, "deepseek-harness", "codex", "en")).toBe("\u2014");
+  });
+
+  it("dashes a row whose Harness has reported no speed yet", () => {
+    expect(outputSpeedFor(noSpeedUsage, "codex", "codex", "en")).toBe("\u2014");
+    expect(outputSpeedFor(noSpeedUsage, "codex", "deepseek-harness", "en")).toBe("\u2014");
+  });
+
+  it("dashes both rows for a Harness that has neither row", () => {
+    expect(outputSpeedFor(speedUsage, "pi", "codex", "en")).toBe("\u2014");
+    expect(outputSpeedFor(speedUsage, "pi", "deepseek-harness", "en")).toBe("\u2014");
+  });
+
+  it("dashes both rows when the Thread has no usage at all", () => {
+    expect(outputSpeedFor(null, "codex", "codex", "en")).toBe("\u2014");
+    expect(outputSpeedFor(null, "deepseek-harness", "deepseek-harness", "en")).toBe("\u2014");
+  });
+
+  it("localizes the filled row", () => {
+    expect(outputSpeedFor(speedUsage, "codex", "codex", "zh-CN")).toBe("42.5 Token/秒");
+  });
+});
 
 describe("Renderer Usage localization", () => {
   it("shows credit-only and context-only data without dollar conversion", () => {

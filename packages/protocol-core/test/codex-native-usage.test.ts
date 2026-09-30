@@ -1,11 +1,93 @@
 import { describe, expect, it } from "vitest";
 
+import type { HostTurnId } from "@codexhost/shared-contracts";
 import {
+  CodexOutputSpeedTracker,
+  type CodexOutputSpeedSample,
   observeCodexRateLimitResetCredits,
   observeCodexRateLimits,
   observeCodexTokenUsage,
   projectCodexRateLimitsToCredits,
 } from "../src/codex-native-usage.js";
+
+describe("native Codex output speed", () => {
+  const sample = (
+    turnId: string,
+    outputTokens: number,
+    atMs: number,
+    threadId = "thread-a",
+  ): CodexOutputSpeedSample => ({
+    threadId,
+    turnId: turnId as HostTurnId,
+    outputTokens,
+    atMs,
+  });
+
+  it("needs two observations of the same Turn before it can measure anything", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 100, 1000));
+    expect(tracker.speedFor("thread-a")).toBeUndefined();
+  });
+
+  it("measures decode speed between the first and last observation of a Turn", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 100, 1000));
+    tracker.observe(sample("turn-1", 160, 3000));
+    expect(tracker.speedFor("thread-a")).toBe(30);
+  });
+
+  it("excludes the time before the first observation, which is time-to-first-token", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 10, 1000));
+    tracker.observe(sample("turn-1", 60, 2000));
+    expect(tracker.speedFor("thread-a")).toBe(50);
+  });
+
+  it("never measures across a Turn boundary", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 100, 1000));
+    tracker.observe(sample("turn-2", 500, 2000));
+    tracker.observe(sample("turn-2", 560, 3000));
+    // 60 tokens over 1000ms from the turn-2 window, not 460 over 2000ms.
+    expect(tracker.speedFor("thread-a")).toBe(60);
+  });
+
+  it("ignores an observation that moved no tokens", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 100, 1000));
+    tracker.observe(sample("turn-1", 100, 5000));
+    expect(tracker.speedFor("thread-a")).toBeUndefined();
+  });
+
+  it("ignores an observation whose clock did not move", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 100, 1000));
+    tracker.observe(sample("turn-1", 150, 1000));
+    expect(tracker.speedFor("thread-a")).toBeUndefined();
+  });
+
+  it("keeps Threads independent", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 100, 1000, "thread-a"));
+    tracker.observe(sample("turn-1", 100, 1000, "thread-b"));
+    tracker.observe(sample("turn-1", 120, 1100, "thread-a"));
+    tracker.observe(sample("turn-1", 180, 1200, "thread-b"));
+    expect(tracker.speedFor("thread-a")).toBe(200);
+    expect(tracker.speedFor("thread-b")).toBe(400);
+  });
+
+  it("drops every window and every measurement on reset", () => {
+    const tracker = new CodexOutputSpeedTracker();
+    tracker.observe(sample("turn-1", 100, 1000));
+    tracker.observe(sample("turn-1", 200, 2000));
+    expect(tracker.speedFor("thread-a")).toBe(100);
+    tracker.reset();
+    expect(tracker.speedFor("thread-a")).toBeUndefined();
+    // The window is gone too, so the next observation starts a new one.
+    tracker.observe(sample("turn-1", 400, 3000));
+    expect(tracker.speedFor("thread-a")).toBeUndefined();
+  });
+});
 
 describe("Codex native Usage observations", () => {
   it("maps thread token usage into the Host Usage shape", () => {

@@ -30,7 +30,8 @@ interface RendererUsageMessages {
   readonly context: string;
   readonly recordedCredits: string;
   readonly latestCacheHit: string;
-  readonly outputSpeed: string;
+  readonly codexOutputSpeed: string;
+  readonly dshOutputSpeed: string;
   readonly cacheRead: string;
   readonly cacheWrite: string;
   readonly reasoning: string;
@@ -49,7 +50,8 @@ const ENGLISH_USAGE_MESSAGES: RendererUsageMessages = Object.freeze({
   context: "Context",
   recordedCredits: "Recorded usage",
   latestCacheHit: "Latest cache hit",
-  outputSpeed: "Output speed",
+  codexOutputSpeed: "Codex output speed",
+  dshOutputSpeed: "DSH output speed",
   cacheRead: "Cache read",
   cacheWrite: "Cache write",
   reasoning: "Reasoning",
@@ -68,7 +70,8 @@ const CHINESE_USAGE_MESSAGES: RendererUsageMessages = Object.freeze({
   context: "上下文",
   recordedCredits: "已记录消耗",
   latestCacheHit: "最近缓存命中率",
-  outputSpeed: "输出速度",
+  codexOutputSpeed: "Codex 输出速度",
+  dshOutputSpeed: "DSH 输出速度",
   cacheRead: "缓存读取",
   cacheWrite: "缓存写入",
   reasoning: "推理",
@@ -268,12 +271,34 @@ function addDetailRow(parent: HTMLElement, label: string, value: string, wrap = 
   parent.append(row);
 }
 
+const DSH_HARNESS_ID = "deepseek-harness";
+const NO_OUTPUT_SPEED = "\u2014";
+
+/**
+ * Both output-speed rows are always drawn, so the panel has one fixed shape
+ * regardless of which Harness owns the Thread. The row that does not apply
+ * reads as a dash rather than disappearing, so the reader is never left
+ * wondering whether the Harness failed to report a speed it never had.
+ */
+export function outputSpeedFor(
+  usage: ThreadUsageSnapshot | null,
+  harnessId: string | undefined,
+  rowHarnessId: string,
+  locale: RendererSettingsLocale,
+): string {
+  if (harnessId !== rowHarnessId || usage?.outputTokensPerSecond === undefined) {
+    return NO_OUTPUT_SPEED;
+  }
+  return formatRendererTokenRate(usage.outputTokensPerSecond, locale);
+}
+
 function renderDetails(
   popover: HTMLDivElement,
   usage: ThreadUsageSnapshot | null,
   messages: RendererUsageMessages,
   locale: RendererSettingsLocale,
   accountName: string | null,
+  harnessId: string | undefined,
 ): void {
   popover.replaceChildren();
   const heading = document.createElement("div");
@@ -306,13 +331,16 @@ function renderDetails(
       formatRendererCacheHitRate(usage.cacheHitRatePercent),
     );
   }
-  if (usage?.outputTokensPerSecond !== undefined) {
-    addDetailRow(
-      popover,
-      messages.outputSpeed,
-      formatRendererTokenRate(usage.outputTokensPerSecond, locale),
-    );
-  }
+  addDetailRow(
+    popover,
+    messages.codexOutputSpeed,
+    outputSpeedFor(usage, harnessId, "codex", locale),
+  );
+  addDetailRow(
+    popover,
+    messages.dshOutputSpeed,
+    outputSpeedFor(usage, harnessId, DSH_HARNESS_ID, locale),
+  );
   if (usage?.cachedInputTokens !== undefined) {
     addDetailRow(popover, messages.cacheRead, formatRendererTokenCount(usage.cachedInputTokens));
   }
@@ -538,6 +566,7 @@ export function renderRendererUsageControl(
   usage: ThreadUsageSnapshot | null,
   locale: RendererSettingsLocale = control.locale,
   accountName: string | null = null,
+  harnessId: string | undefined = undefined,
 ): boolean {
   control.locale = locale;
   const messages = rendererUsageMessages(locale);
@@ -598,6 +627,6 @@ export function renderRendererUsageControl(
   control.trigger.setAttribute("aria-label", accessibleSummary);
   control.trigger.title = accessibleSummary;
   control.label.textContent = compactSummary;
-  renderDetails(control.popover, usage, messages, locale, accountName);
+  renderDetails(control.popover, usage, messages, locale, accountName, harnessId);
   return true;
 }

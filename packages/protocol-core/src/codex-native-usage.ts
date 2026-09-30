@@ -12,6 +12,67 @@ interface CodexTokenUsageObservation {
   usage: HostUsage;
 }
 
+/**
+ * One "thread/tokenUsage/updated" observation, reduced to what output-speed
+ * measurement needs. outputTokens is the running total, so consecutive
+ * observations of the same Turn bracket the decode window.
+ */
+export interface CodexOutputSpeedSample {
+  threadId: string;
+  turnId: HostTurnId;
+  outputTokens: number;
+  atMs: number;
+}
+
+/**
+ * Measures native Codex output speed as a decode rate: tokens produced between
+ * the first and last observation of a Turn, over the wall-clock span between
+ * them.
+ *
+ * Time before the first observation is excluded on purpose. That is the
+ * time-to-first-token, and folding it in would make a fast model look slow.
+ * It is also the convention the DeepSeek Harness Adapter uses for
+ * outputTokensPerSecond, so the two numbers stay comparable side by side.
+ *
+ * A Turn's first observation is already a token or two in, so the result is a
+ * slight under-estimate. Reporting the conservative number is the right trade:
+ * it never overstates speed.
+ */
+export class CodexOutputSpeedTracker {
+  readonly #window = new Map<
+    string,
+    { turnId: HostTurnId; firstTokens: number; firstAtMs: number }
+  >();
+  readonly #speedByThread = new Map<string, number>();
+
+  observe(sample: CodexOutputSpeedSample): void {
+    const open = this.#window.get(sample.threadId);
+    if (!open || open.turnId !== sample.turnId) {
+      // First sighting of this Turn: it only opens a window, it cannot measure
+      // a rate on its own.
+      this.#window.set(sample.threadId, {
+        turnId: sample.turnId,
+        firstTokens: sample.outputTokens,
+        firstAtMs: sample.atMs,
+      });
+      return;
+    }
+    const producedTokens = sample.outputTokens - open.firstTokens;
+    const elapsedMs = sample.atMs - open.firstAtMs;
+    if (producedTokens <= 0 || elapsedMs <= 0) return;
+    this.#speedByThread.set(sample.threadId, (producedTokens * 1000) / elapsedMs);
+  }
+
+  speedFor(threadId: string): number | undefined {
+    return this.#speedByThread.get(threadId);
+  }
+
+  reset(): void {
+    this.#window.clear();
+    this.#speedByThread.clear();
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

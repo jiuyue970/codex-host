@@ -821,6 +821,7 @@ export function renderComposerAgentControl(
       usage,
       locale,
       selectedCodexAccount?.email ?? selectedCodexAccount?.label ?? null,
+      state.agent,
     );
   }
   control.harnessCommands.setLocale(locale);

@@ -207,6 +207,7 @@ import {
   decodeThreadListRequest,
   decodeThreadMetadataUpdateRequest,
   decodeThreadRevertRequest,
+  CodexOutputSpeedTracker,
   decodeThreadRollbackRequest,
   encodeJsonFrame,
   mapExternalThreadHarnessError,
@@ -545,6 +546,7 @@ export class AppServerHost {
   #pendingOfficialDelegationThreads = new Set<string>();
   #pendingOfficialTerminalStatuses = new Map<string, DelegationStartResult["status"]>();
   #officialUsageByThread = new Map<string, HostUsage>();
+  readonly #officialOutputSpeed = new CodexOutputSpeedTracker();
   readonly #officialRateLimits = new AccountRateLimits();
   #routeObservationTracker = new RequestRouteObservationTracker();
   #officialServerRequests = new Map<JsonRpcId, JsonRpcId>();
@@ -1625,10 +1627,26 @@ export class AppServerHost {
       typeof parsed.method === "string" &&
       (parsed.method === "account/updated" || parsed.method.startsWith("account/rateLimits/"));
     if (accountScopedNotification) {
-      if (parsed.method === "account/updated") this.#officialRateLimits.reset(input.accountId);
+      if (parsed.method === "account/updated") {
+        this.#officialRateLimits.reset(input.accountId);
+        // A new account means a different model behind the same Thread id, so
+        // any measured speed belongs to the previous account.
+        this.#officialOutputSpeed.reset();
+      }
     }
     const tokenUsage = observeCodexTokenUsage(parsed);
     if (tokenUsage) {
+      if (tokenUsage.usage.outputTokens !== undefined) {
+        // Only the delta between two observations of the SAME Turn is the
+        // number of tokens that Turn actually produced; the tracker resets its
+        // window on a new Turn, which is what keeps that delta honest.
+        this.#officialOutputSpeed.observe({
+          threadId: tokenUsage.threadId,
+          turnId: tokenUsage.turnId,
+          outputTokens: tokenUsage.usage.outputTokens,
+          atMs: Date.now(),
+        });
+      }
       const previous = this.#officialUsageByThread.get(tokenUsage.threadId);
       try {
         this.#officialUsageByThread.set(
@@ -2476,9 +2494,14 @@ export class AppServerHost {
       const accountId = await this.#currentCodexAccountId();
       if (accountId) await this.#refreshOfficialRateLimits(accountId);
       const accountCredits = this.#officialAccountCredits(accountId ?? undefined);
+      const officialUsage = this.#officialUsageByThread.get(params.data.threadId) ?? null;
+      const outputTokensPerSecond = this.#officialOutputSpeed.speedFor(params.data.threadId);
       const result = threadUsageInspectionSchema.parse({
         threadId: params.data.threadId,
-        usage: this.#officialUsageByThread.get(params.data.threadId) ?? null,
+        usage:
+          officialUsage && outputTokensPerSecond !== undefined
+            ? { ...officialUsage, outputTokensPerSecond }
+            : officialUsage,
         ...(accountCredits ? { accountCredits } : {}),
       });
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
