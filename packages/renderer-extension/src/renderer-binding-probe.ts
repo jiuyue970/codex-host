@@ -738,6 +738,18 @@ export function installRendererBindingProbe(
     }
     return null;
   };
+  // Built before anything below can reach for it. `installRendererSidebarAgentIcons`
+  // scans the sidebar synchronously during install, so a declaration placed
+  // further down leaves the first install in the temporal dead zone and the whole
+  // extension throws instead of attaching.
+  const hostConnection = createHostConnection({
+    externalAgents,
+    isDisposed: () => disposed,
+    modelControl: () => modelControl,
+    adapterStatus: () => adapterStatus,
+    inspectHost: (hostId, refresh, retry, force) =>
+      refreshHarnessAvailabilityForHost(hostId, refresh, retry, force),
+  });
   const sidebarAgentIcons = installRendererSidebarAgentIcons({
     getClient: (hostId) => hostConnection.clientForHost(hostId),
     getLocalAgent: localAgentForSidebarThread,
@@ -772,14 +784,6 @@ export function installRendererBindingProbe(
     modelUpdates: 0,
     hook: null,
   };
-  const hostConnection = createHostConnection({
-    externalAgents,
-    isDisposed: () => disposed,
-    modelControl: () => modelControl,
-    adapterStatus: () => adapterStatus,
-    inspectHost: (hostId, refresh, retry, force) =>
-      refreshHarnessAvailabilityForHost(hostId, refresh, retry, force),
-  });
 
   const codexAccountsForHost = (hostId: string | null): RendererCodexAccountState | null => {
     if (!hostId) return null;
