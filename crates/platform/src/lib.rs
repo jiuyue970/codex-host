@@ -18,6 +18,7 @@ mod macos_native_harness_broker;
 #[cfg(target_os = "macos")]
 mod macos_process_observation;
 mod process;
+mod process_log;
 mod process_supervision;
 mod process_termination;
 mod proxy_environment;
@@ -75,6 +76,9 @@ pub use process::{desktop_process_ids, desktop_root_process_ids, process_started
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use process::{
     desktop_process_tree, desktop_root_snapshots_for_installation, process_snapshots,
+};
+pub use process_log::{
+    DEFAULT_MAX_LOG_BYTES, LOG_DIRECTORY_ENV, ProcessLog, default_log_directory, redact_secrets,
 };
 pub use process_supervision::{ChildProcessGuard, SupervisedChild, spawn_supervised};
 pub use process_termination::{terminate_process_group_instance, terminate_process_instance};

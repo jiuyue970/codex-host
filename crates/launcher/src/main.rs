@@ -35,10 +35,10 @@ use codexhost_platform::{
     APPX_RESUME_ARGUMENT, DesktopProcess, launch_desktop, resume_packaged_application,
 };
 use codexhost_platform::{
-    DesktopIdentity, DesktopInstallation, DesktopLaunchMode, SupervisedChild,
-    canonical_existing_file, configure_background_command,
-    desktop_root_process_ids_for_installation, discover_codex_desktop, node_entrypoint_path,
-    spawn_supervised,
+    DEFAULT_MAX_LOG_BYTES, DesktopIdentity, DesktopInstallation, DesktopLaunchMode,
+    LOG_DIRECTORY_ENV, ProcessLog, SupervisedChild, canonical_existing_file,
+    configure_background_command, default_log_directory, desktop_root_process_ids_for_installation,
+    discover_codex_desktop, node_entrypoint_path, spawn_supervised,
 };
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use codexhost_platform::{DesktopSession, launch_desktop_session};
@@ -86,6 +86,11 @@ const NPM_UPDATE_RUNTIME_ENV: [&str; 4] = [
 const START_MENU_ARGUMENT: &str = "--start-menu";
 const READY_LINE: &str = "ready";
 const STARTUP_TRACE_ENV: &str = "CODEXHOST_STARTUP_TRACE";
+const LAUNCHER_LOG_COMPONENT: &str = "launcher";
+
+/// Always-on process log. `None` means the directory or file could not be
+/// opened, which is a degraded-but-running state, not a failure.
+static PROCESS_LOG: OnceLock<Option<ProcessLog>> = OnceLock::new();
 const CONTROLLER_STOP_GRACE: Duration = Duration::from_secs(1);
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const DESKTOP_TREE_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
@@ -188,13 +193,53 @@ fn run_delegation_cli(arguments: &[String]) -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn startup_trace(stage: &str) {
-    if env::var_os(STARTUP_TRACE_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
-        return;
+/// Initializes the always-on process log. Called before `run` so every
+/// Launcher subcommand is covered, and deliberately non-fatal: a host that
+/// cannot open a log file must still start codexhost.
+fn init_process_log() {
+    let log = default_log_directory().ok().and_then(|directory| {
+        ProcessLog::open(LAUNCHER_LOG_COMPONENT, &directory, DEFAULT_MAX_LOG_BYTES).ok()
+    });
+    if let Some(log) = log.as_ref() {
+        log.info(&format!("launcher started pid={}", std::process::id()));
     }
+    let _ = PROCESS_LOG.set(log);
+}
+
+fn process_log() -> Option<&'static ProcessLog> {
+    PROCESS_LOG.get().and_then(|log| log.as_ref())
+}
+
+fn log_info(message: &str) {
+    if let Some(log) = process_log() {
+        log.info(message);
+    }
+}
+
+fn log_warn(message: &str) {
+    if let Some(log) = process_log() {
+        log.warn(message);
+    }
+}
+
+fn log_error(message: &str) {
+    if let Some(log) = process_log() {
+        log.error(message);
+    }
+}
+
+/// Records a startup milestone. The process log keeps every milestone; the
+/// stderr trace stays behind `CODEXHOST_STARTUP_TRACE=1` for foreground
+/// timing runs, which is the only place a user still has a terminal.
+fn startup_trace(stage: &str) {
     static STARTED: OnceLock<Instant> = OnceLock::new();
     let elapsed = STARTED.get_or_init(Instant::now).elapsed().as_millis();
-    eprintln!("[codexhost startup +{elapsed}ms] launcher: {stage}");
+    if let Some(log) = process_log() {
+        log.info(&format!("startup +{elapsed}ms: {stage}"));
+    }
+    if env::var_os(STARTUP_TRACE_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
+        eprintln!("[codexhost startup +{elapsed}ms] launcher: {stage}");
+    }
 }
 
 /// Emits the exact startup-success signal consumed by the npm/dev wrappers so
@@ -710,18 +755,28 @@ fn supervise_desktop(
         Duration::from_secs(30),
     )?;
     startup_trace("Codex Desktop launched");
+    log_info(&format!(
+        "Codex Desktop launched pid={}",
+        desktop.root_snapshot().id
+    ));
     let mut controller = start_desktop_controller(options, control, environment)?;
     let desktop_pid = desktop.root_snapshot().id;
     startup_trace("waiting for Host chain");
     if !wait_for_host_chain(desktop_pid, options, Duration::from_secs(30))? {
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.shutdown(Duration::from_secs(2));
+        log_error("Codex Desktop did not start the codexhost Host chain before timeout");
         return Err("Codex Desktop did not start the codexhost Host chain before timeout".into());
     }
     startup_trace("Host chain ready");
     let _runtime = publish_runtime_descriptor(descriptor_path, control)?;
     startup_trace("runtime descriptor published");
+    log_info(&format!(
+        "runtime descriptor published path={}",
+        descriptor_path.display()
+    ));
     notify_ready_and_detach()?;
+    log_info("launcher detached from the controlling terminal and is supervising");
     #[cfg(target_os = "macos")]
     let mut started_update_request = None;
     let mut last_desktop_tree_refresh = Instant::now();
@@ -729,6 +784,7 @@ fn supervise_desktop(
         #[cfg(target_os = "macos")]
         if let Err(error) = start_pending_update(&mut started_update_request) {
             eprintln!("codexhost launcher: pending update could not be started: {error}");
+            log_warn(&format!("pending update could not be started: {error}"));
         }
         #[cfg(target_os = "macos")]
         let helper_started = started_update_request.is_some();
@@ -745,6 +801,9 @@ fn supervise_desktop(
         }
         if let Some(status) = controller.try_wait()? {
             let _ = desktop.shutdown(Duration::from_secs(2));
+            log_error(&format!(
+                "Desktop Controller exited while Desktop was running: {status}"
+            ));
             return Err(
                 format!("Desktop Controller exited while Desktop was running: {status}").into(),
             );
@@ -763,6 +822,9 @@ fn supervise_desktop(
             root_is_running
         };
         if !desktop_is_running {
+            log_info(&format!(
+                "Codex Desktop pid={desktop_pid} exited; stopping the managed stack"
+            ));
             stop_desktop_controller(&mut controller)?;
             desktop.cleanup_escaped(Duration::from_secs(2))?;
             desktop.disarm_cleanup();
@@ -793,12 +855,14 @@ fn supervise_desktop(
     )?;
     startup_trace("Codex Desktop launched");
     let desktop_pid = desktop.id();
+    log_info(&format!("Codex Desktop launched pid={desktop_pid}"));
     wait_for_launched_desktop_ownership(installation, &mut desktop, Duration::from_secs(5))?;
     let mut controller = match start_desktop_controller(options, control, environment) {
         Ok(started) => started,
         Err(error) => {
             let _ = desktop.kill();
             let _ = desktop.wait();
+            log_error(&format!("Desktop Controller failed to start: {error}"));
             return Err(error);
         }
     };
@@ -807,6 +871,7 @@ fn supervise_desktop(
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.kill();
         let _ = desktop.wait();
+        log_error("Codex Desktop did not start the codexhost Host chain before timeout");
         return Err("Codex Desktop did not start the codexhost Host chain before timeout".into());
     }
     startup_trace("Host chain ready");
@@ -820,14 +885,23 @@ fn supervise_desktop(
         }
     };
     startup_trace("runtime descriptor published");
+    log_info(&format!(
+        "runtime descriptor published path={}",
+        descriptor_path.display()
+    ));
     notify_ready_and_detach()?;
+    log_info("launcher detached from the controlling terminal and is supervising");
     loop {
         if should_stop_desktop_for_update(false) {
             if let Err(error) = stop_managed_desktop_for_update(&mut desktop, &mut controller) {
                 eprintln!(
                     "codexhost launcher: managed Desktop could not be stopped for update: {error}"
                 );
+                log_warn(&format!(
+                    "managed Desktop could not be stopped for update: {error}"
+                ));
             } else {
+                log_info("managed Desktop stopped for a pending update");
                 return Ok(());
             }
         }
@@ -836,14 +910,21 @@ fn supervise_desktop(
                 wait_for_desktop_exit(&mut desktop, Duration::from_secs(1))?
             {
                 if desktop_status.success() {
+                    log_info("Codex Desktop exited normally");
                     return Ok(());
                 }
+                log_error(&format!(
+                    "Codex Desktop exited unsuccessfully: {desktop_status}"
+                ));
                 return Err(
                     format!("Codex Desktop exited unsuccessfully: {desktop_status}").into(),
                 );
             }
             let _ = desktop.kill();
             let _ = desktop.wait();
+            log_error(&format!(
+                "Desktop Controller exited while Desktop was running: {status}"
+            ));
             return Err(
                 format!("Desktop Controller exited while Desktop was running: {status}").into(),
             );
@@ -851,8 +932,10 @@ fn supervise_desktop(
         if let Some(status) = desktop.try_wait()? {
             stop_desktop_controller(&mut controller)?;
             if !status.success() {
+                log_error(&format!("Codex Desktop exited unsuccessfully: {status}"));
                 return Err(format!("Codex Desktop exited unsuccessfully: {status}").into());
             }
+            log_info("Codex Desktop exited normally");
             return Ok(());
         }
         thread::sleep(Duration::from_millis(100));
@@ -905,6 +988,16 @@ fn desktop_environment(
     }
     if let Some(data_directory) = data_directory {
         environment.push((OsString::from(DATA_DIRECTORY_ENV), data_directory));
+    }
+    // The Host Runtime and Desktop Controller never re-derive a platform log
+    // path: they read the directory this Launcher already resolved.
+    if let Some(log) = process_log()
+        && let Some(directory) = log.path().parent()
+    {
+        environment.push((
+            OsString::from(LOG_DIRECTORY_ENV),
+            directory.as_os_str().to_os_string(),
+        ));
     }
     if env::var_os(STARTUP_TRACE_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
         environment.push((OsString::from(STARTUP_TRACE_ENV), OsString::from("1")));
@@ -1238,11 +1331,16 @@ fn main() -> ExitCode {
     if start_menu_launch || appx_resume {
         hide_console_window();
     }
+    init_process_log();
     match run(&arguments) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            log_info("launcher finished successfully");
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             let message = format!("codexhost launcher: {error}");
             eprintln!("{message}");
+            log_error(&message);
             #[cfg(target_os = "windows")]
             if start_menu_launch {
                 show_error_dialog(&message);
