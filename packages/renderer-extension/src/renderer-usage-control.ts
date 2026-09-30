@@ -279,6 +279,12 @@ const NO_OUTPUT_SPEED = "\u2014";
  * regardless of which Harness owns the Thread. The row that does not apply
  * reads as a dash rather than disappearing, so the reader is never left
  * wondering whether the Harness failed to report a speed it never had.
+ *
+ * A rate is visible text per second: reasoning is excluded, because it is
+ * billed as output but never reaches the screen, and time-to-first-token is
+ * excluded, because it would make a fast model look slow. The label stays
+ * short because the popover column is narrow; the rate is the number of
+ * tokens the reader can actually watch arrive.
  */
 export function outputSpeedFor(
   usage: ThreadUsageSnapshot | null,

@@ -25,14 +25,17 @@ export interface CodexOutputSpeedSample {
 }
 
 /**
- * Measures native Codex output speed as a decode rate: tokens produced between
- * the first and last observation of a Turn, over the wall-clock span between
- * them.
+ * Measures native Codex output speed as a decode rate: visible tokens produced
+ * between the first and last observation of a Turn, over the wall-clock span
+ * between them.
+ *
+ * Reasoning is excluded. Codex bills it as output, but it never reaches the
+ * screen, so including it would report a Turn's thinking time as slow typing.
+ * The frame already reports the two separately, so the two numbers only agree
+ * when both are measured the same way.
  *
  * Time before the first observation is excluded on purpose. That is the
  * time-to-first-token, and folding it in would make a fast model look slow.
- * It is also the convention the DeepSeek Harness Adapter uses for
- * outputTokensPerSecond, so the two numbers stay comparable side by side.
  *
  * A Turn's first observation is already a token or two in, so the result is a
  * slight under-estimate. Reporting the conservative number is the right trade:

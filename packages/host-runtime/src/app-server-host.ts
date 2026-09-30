@@ -1640,10 +1640,16 @@ export class AppServerHost {
         // Only the delta between two observations of the SAME Turn is the
         // number of tokens that Turn actually produced; the tracker resets its
         // window on a new Turn, which is what keeps that delta honest.
+        //
+        // Reasoning is billed as output but never reaches the screen, so
+        // counting it would report a Turn's thinking time as slow typing. The
+        // same breakdown already separates the two, so the rate is measured
+        // over what the reader actually sees being produced.
+        const reasoningOutputTokens = tokenUsage.usage.reasoningOutputTokens ?? 0;
         this.#officialOutputSpeed.observe({
           threadId: tokenUsage.threadId,
           turnId: tokenUsage.turnId,
-          outputTokens: tokenUsage.usage.outputTokens,
+          outputTokens: Math.max(0, tokenUsage.usage.outputTokens - reasoningOutputTokens),
           atMs: Date.now(),
         });
       }
