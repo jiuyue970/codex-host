@@ -25,6 +25,7 @@ import {
 } from "./settings/trigger.js";
 import {
   inspectComposerModelContract,
+  type RendererAdapterState,
   type RendererComposerModelContractState,
 } from "./versioned-renderer-adapter.js";
 
@@ -50,7 +51,7 @@ export interface RendererContractAuditInspection {
   fork: RendererForkContractInspection;
   production: {
     bindingPresent: boolean;
-    adapterState: "installing" | "ready" | "unsupported" | "absent";
+    adapterState: RendererAdapterState | "absent";
     adapterReason: string;
     titlePolicyState: "ready" | "absent" | "unknown";
     draftPrewarmPolicyState: "ready" | "absent" | "unknown";

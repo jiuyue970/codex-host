@@ -67,7 +67,7 @@ export function hermesTransportModelId(
   });
 }
 
-export type RendererAdapterState = "installing" | "ready" | "unsupported";
+export type RendererAdapterState = "installing" | "ready" | "no-route" | "unsupported";
 
 export interface LockedComposerSelection {
   agent: RendererAgent;
@@ -923,8 +923,11 @@ export function installCurrentRendererAdapter(): {
     const route = disposed ? null : (window.__codexhostHostRoutingV1?.forComposer() ?? null);
     usageSubscription.connect(clients.forRoute(route));
     idleReleaseSync.connect(disposed ? null : clients.forHost("local"));
+    // No route is not an installation in progress. It is what a surface
+    // without a Composer sees, and reporting it as "installing" made Settings
+    // tell the operator an install had stalled when nothing was installing.
     updateStatus(
-      route ? "ready" : "installing",
+      route ? "ready" : "no-route",
       route ? "ready" : "draft-routing-policy-unavailable",
       route ? "request-bridge" : null,
     );

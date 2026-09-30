@@ -557,12 +557,12 @@ function connectionItems(
   diagnostics: RendererConnectionDiagnostics | null,
 ): ConnectionListItem[] {
   return [
-    {
-      key: "renderer-adapter",
-      name: messages.connectionAdapter,
-      availability: snapshot.adapter.state,
-      error: null,
-    },
+    // The Renderer adapter is deliberately absent here. It answers for the
+    // Composer it is attached to, and Settings is not one: with no Composer
+    // there is no route to report on, so any row drawn from that state would
+    // describe a surface the operator is not looking at. Agent availability is
+    // the question this page exists to answer, and a Host that is unreachable
+    // gets its own row below rather than being inferred from the adapter.
     // A Host that is not connected gets its own row, above the Agents. One
     // unreachable bridge is a Host fault, and naming it here is what stops the
     // Agent rows below from being read as nine separate broken Harnesses.
@@ -863,21 +863,8 @@ export function createConnectionsSettingsPage(
           launchControls = { hostId: selectedHost.hostId, itemKey: item.key, element };
         };
 
-        const pinnedItem = items.find((item) => item.key === "renderer-adapter");
-        if (pinnedItem) {
-          const row = createConnectionRow(
-            document,
-            pinnedItem,
-            messages,
-            pinnedItem.key === selectedItemKey,
-            () => selectItem(pinnedItem),
-          );
-          rowElements.set(pinnedItem.key, row);
-          rows.append(row);
-        }
-
         // Only real, switchable external Agents participate in the
-        // Main / More grouping — the Renderer adapter above stays pinned.
+        // Main / More grouping.
         const groupableItems = items.filter(
           (item): item is ConnectionListItem & { agentSnapshot: RendererConnectionAgentSnapshot } =>
             item.agentSnapshot !== undefined,
