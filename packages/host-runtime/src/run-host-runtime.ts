@@ -3,6 +3,7 @@ import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { logInfo } from "@codexhost/desktop-control";
 import { UPDATE_RUNTIME_ENV } from "@codexhost/update-manager";
 
 import { AppServerHost, officialEnvironment } from "./app-server-host.js";
@@ -155,12 +156,17 @@ export async function runHostRuntime(input: {
           environment: delegationEnvironment,
           diagnosticOutput: process.stderr,
         });
+        // This is the step that fails when the installed Codex App is missing
+        // or its bundled CLI moved, and until now that failure only ever
+        // reached stderr, which the launcher is not reading.
+        logInfo("official Codex runtime prepared");
         const shared = {
           officialRuntimeScope: official.officialRuntimeScope,
           accountControl: official.accountControl,
         };
         if (!remoteControlPlan) {
           try {
+            logInfo("starting Host chain");
             return await new AppServerHost({
               stockCodexPath,
               arguments: input.arguments,

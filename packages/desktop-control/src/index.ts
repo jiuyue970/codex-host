@@ -85,6 +85,9 @@ export type {
   DesktopControllerReadiness,
 } from "./production-controller.js";
 
+export { initializeProcessLog, logError, logInfo, logWarn } from "./process-log.js";
+export type { ProcessLog } from "./process-log.js";
+
 export const packageMetadata = {
   name: "@codexhost/desktop-control",
   contractVersion: WORKSPACE_CONTRACT_VERSION,
