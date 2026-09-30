@@ -27,6 +27,14 @@ export interface RendererConnectionAgentSnapshot {
 export interface RendererConnectionHostSnapshot {
   readonly hostId: string;
   readonly active: boolean;
+  /// Whether the Host itself is reachable. This is deliberately separate from
+  /// per-Agent availability: one dead bridge cannot say anything about the
+  /// nine Harnesses behind it, and reporting it as ten broken Agents sent users
+  /// hunting for ten bugs that did not exist.
+  readonly connection: "connecting" | "connected" | "disconnected";
+  /// Operator-facing explanation of a non-connected Host, or null when it is
+  /// connected. Names the real fault so the fix is obvious.
+  readonly diagnostic: string | null;
   readonly agents: readonly RendererConnectionAgentSnapshot[];
 }
 
@@ -555,6 +563,24 @@ function connectionItems(
       availability: snapshot.adapter.state,
       error: null,
     },
+    // A Host that is not connected gets its own row, above the Agents. One
+    // unreachable bridge is a Host fault, and naming it here is what stops the
+    // Agent rows below from being read as nine separate broken Harnesses.
+    ...(host.connection === "connected"
+      ? []
+      : [
+          {
+            key: `host:${host.hostId}`,
+            name: connectionHostName(host.hostId, messages),
+            availability: host.connection === "connecting" ? "checking" : "unavailable",
+            error: {
+              code: "unavailable",
+              message: host.diagnostic ?? "",
+              retryable: true,
+              stage: "request",
+            },
+          } satisfies ConnectionListItem,
+        ]),
     ...host.agents.map((agent): ConnectionListItem => ({
       key: agent.agent,
       name: RENDERER_AGENT_LABELS[agent.agent],

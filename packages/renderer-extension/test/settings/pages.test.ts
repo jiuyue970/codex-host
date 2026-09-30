@@ -744,6 +744,8 @@ describe("Renderer Connections page", () => {
           {
             hostId: "remote-test",
             active: true,
+            connection: "connected",
+            diagnostic: null,
             agents: [{ agent, availability: "notInstalled", error: null }],
           },
         ],
@@ -835,6 +837,8 @@ describe("Renderer Connections page", () => {
           hosts: ["local", "remote-test"].map((hostId) => ({
             hostId,
             active: hostId === "local",
+            connection: "connected",
+            diagnostic: null,
             agents: [{ agent, availability: "notInstalled", error: null }],
           })),
         }),
@@ -922,6 +926,8 @@ describe("Renderer Connections page", () => {
           {
             hostId: "local",
             active: true,
+            connection: "connected",
+            diagnostic: null,
             agents: [
               {
                 agent: "deepseek-harness",
@@ -934,6 +940,8 @@ describe("Renderer Connections page", () => {
           {
             hostId: "remote-ssh-codex-managed:fixture",
             active: false,
+            connection: "connected",
+            diagnostic: null,
             agents: [
               {
                 agent: "deepseek-harness",
@@ -1015,6 +1023,8 @@ describe("Renderer Connections page", () => {
           {
             hostId: "local",
             active: true,
+            connection: "connected",
+            diagnostic: null,
             agents: [
               {
                 agent: "pi",
@@ -1042,6 +1052,8 @@ describe("Renderer Connections page", () => {
           {
             hostId: "remote-ssh-codex-managed:%E5%85%AC%E5%8F%B8",
             active: false,
+            connection: "connected",
+            diagnostic: null,
             agents: [{ agent: "pi", availability: "ready", error: null }],
           },
         ],

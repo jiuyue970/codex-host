@@ -8,6 +8,7 @@ import {
 } from "@codexhost/shared-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { modelSelectionForAgent } from "../src/versioned-renderer-adapter.js";
+import { refreshConnectionHosts } from "../src/renderer-host-connection.js";
 
 import {
   applyComposerModelWrite,
@@ -21,7 +22,6 @@ import {
   lateConversationTargetResolution,
   harnessAvailabilityDuringInspect,
   passiveHarnessAvailabilityAgents,
-  refreshConnectionHosts,
   restoredThreadOwnership,
   retryableHarnessAvailabilityAgents,
   resolveCurrentCodexAccountId,

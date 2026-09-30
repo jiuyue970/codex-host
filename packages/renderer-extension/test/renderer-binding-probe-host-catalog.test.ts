@@ -156,7 +156,7 @@ function emptyInspection() {
   };
 }
 
-function installFakeBrowser(): void {
+function installFakeBrowser() {
   const listeners = new EventTarget();
   const composer = {
     isConnected: true,
@@ -202,7 +202,14 @@ function installFakeBrowser(): void {
   };
   vi.stubGlobal("window", window_);
   vi.stubGlobal("document", document_);
-  vi.stubGlobal("Node", { ELEMENT_NODE: 1 });
+  // Node has to stay a callable constructor: Vitest's failure formatter does
+  // `value instanceof Node`, and a plain object there turns every failed
+  // assertion into "Right-hand side of 'instanceof' is not callable" with the
+  // real diff swallowed. Nothing in the renderer source reads either symbol.
+  vi.stubGlobal(
+    "Node",
+    Object.assign(function NodeStub() {}, { ELEMENT_NODE: 1 }),
+  );
   vi.stubGlobal(
     "MutationObserver",
     class {
@@ -221,6 +228,10 @@ function installFakeBrowser(): void {
       }
     },
   );
+  // Returned so a test can observe the probe's timer schedule. Call
+  // vi.useFakeTimers() first if you intend to drive them: the fake window
+  // captures whatever setTimeout is bound at this moment.
+  return window_;
 }
 
 afterEach(() => {
@@ -406,11 +417,18 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     await Promise.resolve();
     await Promise.resolve();
     const hosts = diagnostics?.snapshot().hosts;
-    expect(
-      hosts
-        ?.find(({ hostId }) => hostId === "remote-ssh-discovered:linux")
-        ?.agents.find(({ agent }) => agent === "pi"),
-    ).toMatchObject({ availability: "error", error: { code: "unavailable", retryable: true } });
+    const remoteHost = hosts?.find(({ hostId }) => hostId === "remote-ssh-discovered:linux");
+    // The Host row carries the fault: one unreachable bridge is a Host
+    // problem, and it names itself.
+    expect(remoteHost?.connection).toBe("disconnected");
+    expect(remoteHost?.diagnostic).toContain("no client registered");
+    // The Agent row is deliberately left alone. Reporting this Harness as
+    // broken is what used to send an operator hunting for nine bugs that did
+    // not exist behind a single dead process.
+    expect(remoteHost?.agents.find(({ agent }) => agent === "pi")).toMatchObject({
+      availability: "checking",
+      error: null,
+    });
     expect(
       hosts?.find(({ hostId }) => hostId === "local")?.agents.find(({ agent }) => agent === "pi"),
     ).toMatchObject({ availability: "ready", error: null });
@@ -1046,5 +1064,191 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     expect(testState.renderedModelViews).not.toContainEqual(
       expect.objectContaining({ status: "error" }),
     );
+  });
+});
+
+describe("Renderer connection diagnostics snapshot", () => {
+  const localHost = () => {
+    const diagnostics = testState.getConnectionDiagnostics?.();
+    if (!diagnostics) throw new Error("connection diagnostics were not installed");
+    const host = (
+      diagnostics as unknown as {
+        snapshot(): { hosts: Array<Record<string, unknown>> };
+      }
+    )
+      .snapshot()
+      .hosts.find((candidate) => candidate.hostId === "local");
+    if (!host) throw new Error("local Host is missing from the snapshot");
+    return host as unknown as {
+      connection: string;
+      diagnostic: string | null;
+      agents: Array<{ availability: string; error: unknown }>;
+    };
+  };
+
+  it("reports an attached bridge as connected with no diagnostic", async () => {
+    installFakeBrowser();
+    const modelControl = {
+      currentHostId: () => "local",
+      clientForHost: vi.fn(() => ({ inspectHarness: vi.fn(async () => readyInspection()) })),
+      inspectHarness: vi.fn(async () => readyInspection()),
+      inspectThread: vi.fn(),
+      inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+      inspectThreadUsage: vi.fn(),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      modelControl as never,
+    );
+
+    await vi.waitFor(() => expect(localHost().connection).toBe("connected"));
+    expect(localHost().diagnostic).toBeNull();
+  });
+
+  it("reports a never-attached bridge as connecting and invents no Agent error", async () => {
+    installFakeBrowser();
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      null,
+    );
+
+    const host = localHost();
+    // Never connected, so this is a start-up wait rather than a failure.
+    expect(host.connection).toBe("connecting");
+    expect(host.diagnostic).toContain("has not attached a Renderer control bridge");
+    // The regression this whole path exists for: no Agent is blamed.
+    expect(host.agents.length).toBeGreaterThan(0);
+    for (const agent of host.agents) {
+      expect(agent.error).toBeNull();
+      expect(agent.availability).not.toBe("error");
+    }
+  });
+
+  it("distinguishes an attached bridge that does not know the Host", async () => {
+    installFakeBrowser();
+    const modelControl = {
+      currentHostId: () => "someone-else",
+      clientForHost: vi.fn(() => undefined),
+      inspectHarness: vi.fn(async () => readyInspection()),
+      inspectThread: vi.fn(),
+      inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+      inspectThreadUsage: vi.fn(),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      modelControl as never,
+    );
+
+    await vi.waitFor(() => expect(localHost().diagnostic).toContain("no client registered"));
+    expect(localHost().diagnostic).not.toContain("has not attached");
+  });
+
+  it("keeps inspecting a Host that starts after the start-up burst", async () => {
+    vi.useFakeTimers();
+    try {
+      installFakeBrowser();
+      const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+      const probe = installRendererBindingProbe({
+        enabledAgents: ["codex", "claude-code"],
+        defaultAgent: "codex",
+      });
+
+      // A bridge attached but not yet knowing this Host. setAdapter is called
+      // exactly once, so nothing but the retry can drive an inspection.
+      const inspectHarness = vi.fn(async () => readyInspection());
+      let registered: unknown = undefined;
+      const modelControl = {
+        currentHostId: () => (registered ? "local" : "someone-else"),
+        clientForHost: vi.fn(() => registered),
+        inspectHarness,
+        inspectThread: vi.fn(),
+        inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+        inspectThreadUsage: vi.fn(),
+        subscribeThreadUsage: () => () => undefined,
+      };
+      probe.setAdapter(
+        { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+        undefined,
+        undefined,
+        modelControl as never,
+      );
+      expect(localHost().connection).toBe("connecting");
+
+      // inspectHarness is shared with Model-catalog loading, so the absolute
+      // call count is not the signal. Availability state is: nothing but an
+      // availability inspection can move it off "checking".
+      const settling = inspectHarness.mock.calls.length;
+      expect(localHost().agents.every((agent) => agent.availability === "checking")).toBe(true);
+
+      // Well past the 15.5s start-up burst, where the old schedule gave up.
+      await vi.advanceTimersByTimeAsync(30_000 * 3);
+      expect(inspectHarness.mock.calls.length).toBe(settling);
+      expect(localHost().agents.every((agent) => agent.availability === "checking")).toBe(true);
+
+      // The Host finishes coming up. Nobody presses refresh: the heartbeat has
+      // to be the thing that notices.
+      registered = { inspectHarness };
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(inspectHarness.mock.calls.length).toBeGreaterThan(settling);
+      await vi.waitFor(() => expect(localHost().connection).toBe("connected"));
+      expect(localHost().agents.every((agent) => agent.availability === "ready")).toBe(true);
+      expect(localHost().diagnostic).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops re-checking once the probe is disposed", async () => {
+    vi.useFakeTimers();
+    try {
+      installFakeBrowser();
+      const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+      const probe = installRendererBindingProbe({
+        enabledAgents: ["codex", "claude-code"],
+        defaultAgent: "codex",
+      });
+      probe.setAdapter(
+        { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+        undefined,
+        undefined,
+        null,
+      );
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(localHost().connection).toBe("connecting");
+
+      probe.dispose();
+      // Disposal drops the diagnostics handle, so nothing can observe a late
+      // bridge arriving after the probe is gone.
+      expect(testState.getConnectionDiagnostics?.()).toBeNull();
+      await vi.advanceTimersByTimeAsync(30_000 * 5);
+      expect(testState.getConnectionDiagnostics?.()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
