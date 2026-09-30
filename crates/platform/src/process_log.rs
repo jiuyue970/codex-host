@@ -246,7 +246,7 @@ impl ProcessLog {
     }
 
     fn write(&self, level: LogLevel, message: &str) {
-        let record = format!(
+        let mut record = format!(
             "{} pid={} level={} component={} {}",
             iso8601_utc_now(),
             std::process::id(),
@@ -266,7 +266,16 @@ impl ProcessLog {
                 Err(_) => return,
             }
         }
-        let _ = writeln!(file, "{record}");
+        // The terminator joins the record in the same buffer. `writeln!` would
+        // issue a second syscall, and the launcher writes from two processes
+        // at once, so a split record interleaves into its neighbour and the
+        // log stops being readable.
+        // The terminator joins the record in the same buffer. `writeln!` would
+        // issue a second syscall, and the launcher writes from two processes
+        // at once, so a split record interleaves into its neighbour and the
+        // log stops being readable.
+        record.push('\n');
+        let _ = file.write_all(record.as_bytes());
         let _ = file.flush();
     }
 }
@@ -370,6 +379,53 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 mod tests {
     use super::{LogLevel, ProcessLog, civil_from_days, iso8601_utc_now, redact_secrets};
     use crate::temporary_directory;
+
+    #[test]
+    fn keeps_records_intact_when_two_writers_share_a_file() {
+        let directory = temporary_directory("process-log-concurrent");
+        // Separate handles on purpose: the launcher really does write from a
+        // parent and a child process at the same moment, and that is the shape
+        // that used to splice two records into one unreadable line.
+        // Both handles name the same component, so they append to the same
+        // file exactly as a launcher parent and its child do.
+        let left = ProcessLog::open("shared", &directory, u64::MAX).expect("left log");
+        let right = ProcessLog::open("shared", &directory, u64::MAX).expect("right log");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let left_writer = {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for index in 0..500 {
+                    left.info(&format!("left record {index}"));
+                }
+            })
+        };
+        let right_writer = {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for index in 0..500 {
+                    right.error(&format!("right record {index}"));
+                }
+            })
+        };
+        left_writer.join().expect("left writer");
+        right_writer.join().expect("right writer");
+
+        let contents = std::fs::read_to_string(directory.join("shared.log")).expect("read log");
+        assert!(
+            contents.ends_with('\n'),
+            "log must end on a record boundary"
+        );
+        for line in contents.lines() {
+            assert!(
+                line.contains(" pid="),
+                "record was spliced into a neighbour: {line}"
+            );
+        }
+        assert_eq!(contents.lines().count(), 1000, "every record must survive");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn redacts_sensitive_assignments() {
