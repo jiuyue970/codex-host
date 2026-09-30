@@ -139,8 +139,18 @@ export function installRendererHostRouting(
             (manager) => manager.getHostId?.() ?? manager.requestClient.hostId,
           ),
     );
-    const hostId = hostIds.size === 1 ? hostIds.values().next().value : null;
-    return typeof hostId === "string" && hostId ? hostId : null;
+    const candidates = [...hostIds].filter(
+      (hostId): hostId is string => typeof hostId === "string" && hostId.length > 0,
+    );
+    if (candidates.length === 1) return candidates[0] ?? null;
+    if (candidates.length === 0) return null;
+    // Several environments are mounted. One of them naming a Host this runtime
+    // cannot serve must not cost the others their route: a page that merely
+    // lists an unusable environment is not a page whose usable one stopped
+    // working. Two usable environments are genuinely ambiguous and still
+    // refuse, because guessing would send a Turn to the wrong Host.
+    const reachable = candidates.filter((hostId) => lookup(hostId, discovery) !== null);
+    return reachable.length === 1 ? (reachable[0] ?? null) : null;
   };
   const routing: RendererHostRouting = {
     forHost(hostId) {

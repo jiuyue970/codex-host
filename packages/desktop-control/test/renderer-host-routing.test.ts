@@ -59,6 +59,29 @@ function setup(initialHostId: string) {
   return { renderer, target, local, remote, managers, manager, fiber, editors };
 }
 
+it("keeps a supported Host addressable when another environment is also mounted", async () => {
+  // Two Composers, two environments. The second is not something this Host
+  // can serve, but its presence must not cost the first one its route: a page
+  // that merely lists an unusable environment is not a page whose only
+  // working environment has stopped working.
+  const fixture = setup("local");
+  fixture.editors.push({
+    __reactFiber$host: {
+      memoizedProps: { executionTargetHostId: "codex-cloud:managed" },
+      memoizedState: { memoizedState: null, next: null },
+      return: null,
+    },
+    parentElement: null,
+  });
+  await installRendererDraftPrewarmPolicyDirect(fixture.renderer);
+  const routing = fixture.target.__codexhostHostRoutingV1 as Routing;
+  expect(routing).toBeDefined();
+  try {
+    expect(routing.forComposer()).not.toBeNull();
+  } finally {
+    routing.dispose();
+  }
+});
 it.each(["local", "remote-ssh-discovered:linux"])(
   "keeps both Hosts addressable and switches immediately from %s without a Controller poll",
   async (initialHostId) => {

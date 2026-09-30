@@ -891,9 +891,13 @@ describe("Renderer draft prewarm policy", () => {
         ...fiberRequestManagerFixture(),
         getHostId: () => remoteHostId,
       };
+      // Both identities below must be servable for the conflict to be real. A
+      // dangling Host id is a different case, and one that must not silence
+      // the Host that is actually there.
       const getForHostId = vi.fn(function (this: unknown, hostId: string) {
         expect(this).toBe(registry);
-        return hostId === remoteHostId ? remoteManager : null;
+        if (hostId === remoteHostId) return remoteManager;
+        return hostId === "local" ? localManager : null;
       });
       const registry = {
         addManager: vi.fn(),
