@@ -1083,10 +1083,11 @@ describe("Renderer Connections page", () => {
         candidate.className.split(" ").includes("settings-connection-row__mark--logo"),
       ),
     ).toHaveLength(3);
-    // Settings is not a Composer, so the Renderer adapter has no route to
-    // report on here. Drawing it would tell the operator an install had
-    // stalled when nothing was installing.
-    expect(visibleText(content)).not.toContain("CH");
+    // The adapter row is the only place the operator learns that the adapter
+    // cannot serve, so it stays. What must not come back is the claim that an
+    // install is under way: no install began, and naming one would send the
+    // reader after a build that does not exist.
+    expect(visibleText(content)).toContain("CH");
     expect(visibleText(content)).not.toContain("安装中");
     expect(visibleText(content)).toContain("公司");
     expect(visibleText(content)).toContain("pi exited with code 1");
